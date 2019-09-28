@@ -3,7 +3,7 @@
 version       = "0.1.0"
 author        = "exelotl"
 description   = "Nim bindings for SunVox modular synthesizer"
-license       = "MIT"
+license       = "0BSD"
 srcDir        = "src"
 
 # Dependencies
