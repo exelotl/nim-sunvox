@@ -325,7 +325,7 @@ proc samplerLoadFromMemory*(slot: cint, samplerModule: cint, data: pointer, data
 proc getNumberOfModules*(slot: cint): cint {.importc: "sv_get_number_of_modules", dynlib:libname.}
   ## Get the number of modules in the song.
 
-proc findModule*(): cint {.importc: "sv_find_module", dynlib:libname.}
+proc findModule*(slot: cint, name: cstring): cint {.importc: "sv_find_module", dynlib:libname.}
   ## sv_find_module() - find a module by name;
   ## return value: module number or -1 (if not found);
 
