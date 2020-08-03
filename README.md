@@ -1,7 +1,7 @@
 sunvox
 ======
 
-This repo contains Nim bindings for the SunVox shared library / DLL.
+This repo contains Nim bindings for the SunVox shared library / DLL - v1.9.5d
 
 [SunVox](https://www.warmplace.ru/soft/sunvox/) is a powerful freeware cross-platform modular synthesizer and sequencer.
 
