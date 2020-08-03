@@ -1,6 +1,6 @@
 ##
 ##  SunVox modular synthesizer
-##  Copyright (c) 2008 - 2018, Alexander Zolotov <nightradio@gmail.com>, WarmPlace.ru
+##  Copyright (c) 2008 - 2019, Alexander Zolotov <nightradio@gmail.com>, WarmPlace.ru
 ##
 
 import strutils
@@ -30,6 +30,7 @@ const
   TIME_MAP_TYPE_MASK* = 3
 
 # Module flags
+# (these are not exported, in favour of the templates below)
 const
   MODULE_FLAG_EXISTS = ( 1 shl 0 )
   MODULE_FLAG_EFFECT = ( 1 shl 1 )
@@ -44,13 +45,19 @@ const
 type ModuleFlags = distinct cuint
   ## Bitfield containing information about an instrument/effect module.
 
+template mute*(m:ModuleFlags): bool = (m.cuint and MODULE_FLAG_MUTE) != 0
+template solo*(m:ModuleFlags): bool = (m.cuint and MODULE_FLAG_SOLO) != 0
+template bypass*(m:ModuleFlags): bool = (m.cuint and MODULE_FLAG_BYPASS) != 0
 template exists*(m:ModuleFlags): bool = (m.cuint and MODULE_FLAG_EXISTS) != 0
 template effect*(m:ModuleFlags): bool = (m.cuint and MODULE_FLAG_EFFECT) != 0
 template inputs*(m:ModuleFlags): int = ((m.cuint and MODULE_INPUTS_MASK) shr MODULE_INPUTS_OFF).int
 template outputs*(m:ModuleFlags): int = ((m.cuint and MODULE_OUTPUTS_MASK) shr MODULE_OUTPUTS_OFF).int
 
-template pitchToFreq(in_pitch: float): float = ( pow( 2, ( 30720.0 - (in_pitch) ) / 3072.0 ) * 16.3339 )
-template freqToPitch(in_freq: float): float = ( 30720 - log2( (in_freq) / 16.3339 ) * 3072 )
+proc pitchToFreq*(pitch: float): float =
+  pow(2.0, (30720.0 - pitch) / 3072.0) * 16.3339
+
+proc freqToPitch*(freq: float): float =
+  30720.0 - log2(freq / 16.3339) * 3072.0
 
 
 # Sample types
@@ -107,10 +114,12 @@ proc `$`*(v:Version):string =
 # These functions are wrapped to provide a slightly nicer interface
 proc sv_init(config:cstring, freq:cint, channels:cint, flags:cuint): cint {.importc, dynlib:libname.}
 proc sv_set_autostop(slot: cint, autostop: cint): cint {.importc, dynlib:libname, discardable.}
+proc sv_get_autostop(slot: cint): cint {.importc, dynlib:libname.}
 proc sv_end_of_song(slot: cint): cint {.importc, dynlib:libname, discardable.}
 proc sv_audio_callback(buf: pointer, frames: cint, latency: cint, outTime: cuint): cint {.importc, dynlib:libname, discardable.}
 proc sv_audio_callback2(buf: pointer, frames: cint, latency: cint, outTime: cuint, inType: cint, inChannels: cint, inBuf: pointer): cint {.importc, dynlib:libname, discardable.}
 proc sv_get_module_xy(slot: cint, modNum: cint): cuint {.importc, dynlib:libname.}
+proc sv_get_module_finetune(slot: cint, modNum: cint): cint {.importc, dynlib:libname.}
 
 proc getSampleRate*(): cint {.importc: "sv_get_sample_rate", dynlib:libname.}
   ## get current sampling rate (it may differ from the frequency specified in sv_init())
@@ -220,8 +229,8 @@ proc stop*(slot: cint): cint {.importc: "sv_stop", dynlib:libname, discardable.}
 proc setAutostop*(slot: cint, autostop: bool): cint {.discardable.} = sv_set_autostop(slot, autostop.cint)
   ## When false, song is playing infinitely in a loop.
 
-proc getAutostop*(slot: cint): cint {.importc: "sv_get_autostop", dynlib:libname.}
-
+proc getAutostop*(slot: cint): bool = sv_get_autostop(slot).bool
+  ## Check whether autostop is enabled (see `setAutostop`)
 
 proc endOfSong*(slot: cint): bool = sv_end_of_song(slot).bool
   ## Returns false if the song is playing, true if the song has stopped
@@ -236,15 +245,16 @@ proc volume*(slot: cint, vol: cint): cint {.importc: "sv_volume", dynlib:libname
   ## Set master volume from 0 (min) to 256 (max 100%) inclusive
 
 proc setEventT*(slot: cint, timeSet: cint, t: cint): cint {.importc: "sv_set_event_t", dynlib:libname, discardable.}
-
-  #  Set the time of events to be sent by sv_send_event()
-  #  Parameters:
-  #    slot;
-  #    set: 1 - set; 0 - reset (use automatic time setting - the default mode);
-  #    t: the time when the events occurred (in system ticks, SunVox time space).
-  #  Examples:
-  #    sv_set_event_t( slot, 1, 0 ) //not specified - further events will be processed as quickly as possible
-  #    sv_set_event_t( slot, 1, sv_get_ticks() ) //time when the events will be processed = NOW + sound latency * 2
+  ## Set the time of events to be sent by ``sendEvent()``
+  ## Parameters:
+  ##  `slot`
+  ##  `set`  1 = set; 0 = reset (use automatic time setting - the default mode)
+  ##  `t`    the time when the events occurred (in system ticks, SunVox time space).
+  ## Examples:
+  ## ```
+  ##   setEventT( slot, 1, 0 ) //not specified - further events will be processed as quickly as possible
+  ##   setEventT( slot, 1, sv_get_ticks() ) //time when the events will be processed = NOW + sound latency * 2
+  ## ```
 
 proc sendEvent*(slot: cint, trackNum: cint, note: cint, vel: cint, module: cint, ctl: cint, ctlVal: cint): cint {.importc: "sv_send_event", dynlib:libname, discardable.}
   ## Send some event (note ON, note OFF, controller change, etc.)
@@ -279,16 +289,16 @@ proc getSongLengthFrames*(slot: cint): cuint {.importc: "sv_get_song_length_fram
   ## Get the project length in frames.
   ## A frame is one discrete of the sound. Sample rate 44100 Hz means you hear 44100 frames per second.
 
-proc getTimeMap*(slot: cint, startLine: cint, len: cint, dest: ptr cuint, flags: cint): cstring {.importc: "sv_get_time_map", dynlib:libname.}
+proc getTimeMap*(slot: cint, startLine: cint, len: cint, dest: ptr uint32, flags: cint): cint {.importc: "sv_get_time_map", dynlib:libname, discardable.}
   ## Parameters:
-  ##   slot;
-  ##   startLine - first line to read (usually 0);
-  ##   len - number of lines to read;
-  ##   dest - pointer to the buffer (size = len*sizeof(uint32_t)) for storing the map values;
-  ##   flags:
-  ##     TIME_MAP_SPEED: dest[X] = BPM | ( TPL << 16 ) (speed at the beginning of line X);
-  ##     TIME_MAP_FRAMECNT: dest[X] = frame counter at the beginning of line X;
-  ## Return value: 0 if successful, or negative value in case of some error.
+  ##  `slot`
+  ##  `startLine` first line to read (usually 0)
+  ##  `len`       number of lines to read
+  ##  `dest`      pointer to the buffer (size = len*sizeof(uint32_t)) for storing the map values
+  ##  `flags`    TIME_MAP_SPEED: dest[X] = BPM | ( TPL << 16 ) (speed at the beginning of line X)
+  ##             TIME_MAP_FRAMECNT: dest[X] = frame counter at the beginning of line X
+  ## Returns:
+  ##   0 if successful, or negative value in case of some error.
 
 proc newModule*(slot: cint, kind: cstring, name: cstring, x, y, z: cint): cint {.importc: "sv_new_module", dynlib:libname, discardable.}
   ## Create a new module in the song
@@ -342,7 +352,7 @@ proc getModuleOutputs*(slot: cint, modNum: cint): ptr UncheckedArray[cint] {.imp
 
 proc getModuleName*(slot: cint, modNum: cint): cstring {.importc: "sv_get_module_name", dynlib:libname.}
 
-proc getModuleXY*(slot: cint, modNum: cint): tuple[x, y:int] =
+proc getModuleXY*(slot: cint, modNum: cint): tuple[x, y: int] =
   ## Get module XY coordinates.
   ## Normal working area: 0x0..1024x1024
   ## Center: 512x512
@@ -355,17 +365,13 @@ proc getModuleXY*(slot: cint, modNum: cint): tuple[x, y:int] =
 proc getModuleColor*(slot: cint, modNum: cint): cint {.importc: "sv_get_module_color", dynlib:libname.}
   ## Get module color in the following format: 0xBBGGRR
 
-proc sv_get_module_finetune(slot: cint, modNum: cint): cint {.importc: "sv_get_module_finetune", dynlib:libname.}
-  ## get the relative note and finetune of the module;
-  ## return value: ( finetune & 0xFFFF ) | ( ( relative_note & 0xFFFF ) << 16 ).
-  ## Use SV_GET_MODULE_FINETUNE() macro to unpack finetune and relative_note.
-
-proc getModuleFinetune*(slot: cint, modNum: cint): tuple[finetune, relative_note: int] =
+proc getModuleFinetune*(slot: cint, modNum: cint): tuple[finetune, relativeNote: int] =
+  ## Get the relative note and finetune of the module
   var in_finetune = sv_get_module_finetune(slot, modNum)
   result.finetune = (in_finetune and 0xFFFF).int
   if (result.finetune and 0x8000) != 0: result.finetune -= 0x10000
-  result.relative_note = ((in_finetune shr 16) and 0xffff).int
-  if (result.relative_note and 0x8000) != 0: result.relative_note -= 0x10000
+  result.relativeNote = ((in_finetune shr 16) and 0xffff).int
+  if (result.relativeNote and 0x8000) != 0: result.relativeNote -= 0x10000
 
 proc getModuleScope*(slot: cint, modNum: cint, channel: cint, bufferOffset: ptr cint, bufferSize: ptr cint): pointer {.importc: "sv_get_module_scope", dynlib:libname.}
 
